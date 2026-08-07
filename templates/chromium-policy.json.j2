@@ -1,0 +1,59 @@
+{
+  "_comment": "Managed by Ansible - edits will be overwritten.",
+
+  "URLBlocklist": [
+    "*",
+    "file://*",
+    "view-source:*",
+    "javascript://*",
+    "chrome://settings",
+    "chrome://extensions",
+    "chrome://flags",
+    "chrome://net-internals",
+    "chrome://net-export",
+    "chrome://policy",
+    "chrome://system",
+    "devtools://*"
+  ],
+
+  "URLAllowlist": [
+{% for d in whitelist_domains %}
+    "{{ d }}",
+    "*.{{ d }}"{{ "," if not loop.last else "" }}
+{% endfor %}
+  ],
+
+  "ProxyMode": "fixed_servers",
+  "ProxyServer": "127.0.0.1:{{ proxy_port }}",
+  "ProxyBypassList": "",
+
+  "RestoreOnStartup": 4,
+  "RestoreOnStartupURLs": ["{{ start_page }}"],
+  "HomepageLocation": "{{ start_page }}",
+  "ShowHomeButton": false,
+
+  "IncognitoModeAvailability": 1,
+  "DeveloperToolsAvailability": 2,
+  "BrowserSignin": 0,
+  "SyncDisabled": true,
+  "PasswordManagerEnabled": false,
+  "AutofillAddressEnabled": false,
+  "AutofillCreditCardEnabled": false,
+  "DownloadRestrictions": 3,
+  "PrintingEnabled": false,
+  "AllowFileSelectionDialogs": false,
+  "BookmarkBarEnabled": false,
+  "EditBookmarksEnabled": false,
+  "TranslateEnabled": false,
+  "DnsPrefetchingEnabled": false,
+  "QuicAllowed": false,
+  "BackgroundModeEnabled": false,
+  "MetricsReportingEnabled": false,
+  "ExtensionInstallBlocklist": ["*"],
+  "DefaultGeolocationSetting": 2,
+  "DefaultNotificationsSetting": 2,
+  "DefaultPopupsSetting": 2,
+  "DefaultPluginsSetting": 2,
+  "AudioCaptureAllowed": false,
+  "VideoCaptureAllowed": false
+}

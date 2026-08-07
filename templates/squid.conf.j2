@@ -1,0 +1,35 @@
+# Managed by Ansible - edits will be overwritten.
+
+acl kioskhost src 127.0.0.1/32
+acl SSL_ports port 443
+acl Safe_ports port 80 443
+acl CONNECT method CONNECT
+acl allowed_domains dstdomain "/etc/squid/whitelist.txt"
+
+http_access deny !Safe_ports
+http_access deny CONNECT !SSL_ports
+http_access allow localhost manager
+http_access deny manager
+
+http_access allow kioskhost allowed_domains
+http_access deny all
+
+http_port 127.0.0.1:{{ proxy_port }}
+
+# No caching: this box has no RAM to spare and the whitelist is small.
+cache deny all
+cache_mem 8 MB
+maximum_object_size_in_memory 0 KB
+
+{% if squid_access_log %}
+access_log daemon:/var/log/squid/access.log
+logfile_rotate 1
+{% else %}
+access_log none
+{% endif %}
+cache_store_log none
+
+dns_v4_first on
+forwarded_for delete
+via off
+httpd_suppress_version_string on

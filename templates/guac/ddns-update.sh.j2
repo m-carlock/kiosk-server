@@ -1,0 +1,61 @@
+#!/bin/bash
+# Managed by Ansible - edits will be overwritten.
+# Keeps {{ guac_domain }} pointed at this machine's public IP.
+
+set -euo pipefail
+
+RECORD_NAME="{{ guac_domain }}"
+ZONE_NAME="{{ cloudflare_zone }}"
+TTL={{ ddns_ttl }}
+TOKEN_FILE="/etc/caddy/cloudflare.token"
+CACHE="/var/lib/ddns/last_ip"
+{% if ddns_healthcheck_url %}
+HEALTHCHECK="{{ ddns_healthcheck_url }}"
+{% endif %}
+
+API="https://api.cloudflare.com/client/v4"
+TOKEN="$(cat "$TOKEN_FILE")"
+AUTH=(-H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json")
+
+log() { logger -t ddns "$*"; }
+die() { log "ERROR: $*"; echo "ERROR: $*" >&2; exit 1; }
+
+# --- 1. Discover our public IP, with a fallback source --------------
+CURRENT="$(curl -fsS --max-time 10 https://api.ipify.org || true)"
+if ! [[ "$CURRENT" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+  CURRENT="$(curl -fsS --max-time 10 https://ifconfig.me/ip || true)"
+fi
+[[ "$CURRENT" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] || die "could not determine public IP"
+
+# --- 2. Short-circuit if nothing changed ----------------------------
+mkdir -p "$(dirname "$CACHE")"
+if [ -f "$CACHE" ] && [ "$(cat "$CACHE")" = "$CURRENT" ]; then
+{% if ddns_healthcheck_url %}
+  curl -fsS --max-time 10 "$HEALTHCHECK" >/dev/null 2>&1 || true
+{% endif %}
+  exit 0
+fi
+
+# --- 3. Look up zone and record IDs by name -------------------------
+ZONE_ID="$(curl -fsS "${AUTH[@]}" "$API/zones?name=$ZONE_NAME" \
+  | python3 -c 'import sys,json; r=json.load(sys.stdin)["result"]; print(r[0]["id"] if r else "")')"
+[ -n "$ZONE_ID" ] || die "zone $ZONE_NAME not found - check token scope"
+
+RECORD_ID="$(curl -fsS "${AUTH[@]}" \
+  "$API/zones/$ZONE_ID/dns_records?type=A&name=$RECORD_NAME" \
+  | python3 -c 'import sys,json; r=json.load(sys.stdin)["result"]; print(r[0]["id"] if r else "")')"
+[ -n "$RECORD_ID" ] || die "A record $RECORD_NAME not found - create it in Cloudflare first"
+
+# --- 4. Update -------------------------------------------------------
+RESULT="$(curl -fsS -X PATCH "${AUTH[@]}" \
+  "$API/zones/$ZONE_ID/dns_records/$RECORD_ID" \
+  --data "{\"type\":\"A\",\"name\":\"$RECORD_NAME\",\"content\":\"$CURRENT\",\"ttl\":$TTL,\"proxied\":false}" \
+  | python3 -c 'import sys,json; print(json.load(sys.stdin)["success"])')"
+
+[ "$RESULT" = "True" ] || die "Cloudflare rejected the update"
+
+echo "$CURRENT" > "$CACHE"
+log "updated $RECORD_NAME -> $CURRENT"
+{% if ddns_healthcheck_url %}
+curl -fsS --max-time 10 "$HEALTHCHECK" >/dev/null 2>&1 || true
+{% endif %}

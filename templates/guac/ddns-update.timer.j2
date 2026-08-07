@@ -1,0 +1,11 @@
+# Managed by Ansible - edits will be overwritten.
+[Unit]
+Description=Periodic Cloudflare DDNS update
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec={{ ddns_interval }}
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,5 @@
+# Managed by Ansible - edits will be overwritten.
+# Leading dot = this domain AND all subdomains.
+{% for d in whitelist_domains %}
+.{{ d }}
+{% endfor %}

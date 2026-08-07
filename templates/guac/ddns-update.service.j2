@@ -1,0 +1,10 @@
+# Managed by Ansible - edits will be overwritten.
+[Unit]
+Description=Update Cloudflare DNS record for {{ guac_domain }}
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/bin/ddns-update.sh
+User=root

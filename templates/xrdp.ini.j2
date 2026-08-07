@@ -1,0 +1,50 @@
+; Managed by Ansible - edits will be overwritten.
+
+[Globals]
+ini_version=1
+fork=true
+port=3389
+; Bind to all interfaces deliberately: tailscale0 does not exist at boot,
+; so binding to it directly creates a startup race. nftables restricts.
+address=0.0.0.0
+use_vsock=false
+tcp_nodelay=true
+tcp_keepalive=true
+
+security_layer=tls
+crypt_level=high
+ssl_protocols=TLSv1.2, TLSv1.3
+tls_ciphers=HIGH
+certificate=
+key_file=
+
+max_bpp=24
+new_cursors=true
+allow_channels=false
+allow_multimon=false
+bitmap_cache=true
+bitmap_compression=true
+
+; No file redirection, no clipboard exfiltration path
+channel_code=0
+
+blue=009cb5
+grey=dedede
+ls_title=Kiosk
+ls_top_window_bg_color=009cb5
+ls_bg_color=dedede
+
+[Logging]
+LogFile=/var/log/xrdp.log
+LogLevel=INFO
+EnableSyslog=true
+
+; Only one session type is offered, so nobody can pick a real desktop.
+[Xorg]
+name=Kiosk
+lib=libxup.so
+username=ask
+password=ask
+ip=127.0.0.1
+port=-1
+code=20

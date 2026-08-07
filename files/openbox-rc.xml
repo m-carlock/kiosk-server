@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Managed by Ansible - edits will be overwritten.
+     Empty <keyboard> and <mouse> sections kill every shortcut and
+     the right-click root menu. -->
+<openbox_config xmlns="http://openbox.org/3.4/rc">
+  <resistance>
+    <strength>0</strength>
+  </resistance>
+  <focus>
+    <focusNew>yes</focusNew>
+    <followMouse>no</followMouse>
+  </focus>
+  <desktops>
+    <number>1</number>
+    <names><name>Kiosk</name></names>
+  </desktops>
+  <keyboard>
+  </keyboard>
+  <mouse>
+    <context name="Desktop"></context>
+    <context name="Root"></context>
+    <context name="Titlebar"></context>
+    <context name="Frame"></context>
+    <context name="Client"></context>
+  </mouse>
+  <applications>
+    <application class="*">
+      <decor>no</decor>
+      <maximized>yes</maximized>
+      <fullscreen>yes</fullscreen>
+    </application>
+  </applications>
+</openbox_config>

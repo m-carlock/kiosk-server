@@ -1,0 +1,55 @@
+---
+# ============================================================
+#  Guacamole gateway settings. Edit the top block only.
+# ============================================================
+
+# --- Your domain ---------------------------------------------------
+# You must own this and its nameservers must point at Cloudflare.
+guac_domain: "remote.yourdomain.com"
+
+# Cloudflare zone = the root domain, not the subdomain above.
+cloudflare_zone: "yourdomain.com"
+
+# Email for Let's Encrypt expiry notices.
+acme_email: "you@yourdomain.com"
+
+# --- Secrets -------------------------------------------------------
+# DO NOT put real values here. Create secrets.yml with ansible-vault:
+#
+#   ansible-vault create group_vars/secrets.yml
+#
+# and put these two keys in it:
+#
+#   vault_cloudflare_token: "your_scoped_token"
+#   vault_guac_db_password: "a_long_random_string"
+#
+# Token scope: Zone : DNS : Edit, restricted to your zone only.
+cloudflare_token: "{{ vault_cloudflare_token }}"
+guac_db_password: "{{ vault_guac_db_password }}"
+
+# --- Where the kiosk lives -----------------------------------------
+# Tailscale address of the kiosk VM. Guacamole speaks RDP to this.
+kiosk_tailscale_ip: "100.x.y.z"
+kiosk_rdp_port: 3389
+
+# --- DDNS ----------------------------------------------------------
+ddns_interval: "5min"      # systemd timer cadence
+ddns_ttl: 60               # seconds; caps worst-case outage
+# Optional healthchecks.io ping URL. Leave empty to disable.
+# Alerts you if DDNS silently stops updating.
+ddns_healthcheck_url: ""
+
+# --- Client certificates (mTLS) ------------------------------------
+# One cert per helper. These names become the .p12 filenames.
+mtls_clients:
+  - helper1
+  - helper2
+  - helper3
+
+# Validity of issued client certs, in days.
+mtls_cert_days: 825
+
+# --- Misc ----------------------------------------------------------
+guac_listen_port: 8080     # loopback only; Caddy proxies to this
+guac_data_dir: /opt/guacamole
+enable_fail2ban: true

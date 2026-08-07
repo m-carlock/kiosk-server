@@ -1,0 +1,85 @@
+---
+# ============================================================
+#  EDIT THIS FILE. Everything else is machinery.
+# ============================================================
+
+# --- The whitelist -------------------------------------------------
+# Single source of truth. Feeds BOTH the Squid ACL and the Chromium
+# policy, so they can never drift out of sync.
+#
+# Each entry allows the domain AND all its subdomains.
+# Remember the CDNs your sites pull from, or pages render broken.
+whitelist_domains:
+  - etsy.com
+  - etsystatic.com
+  - google.com
+  - gstatic.com
+  - googleapis.com
+  - googleusercontent.com
+  - captcha-delivery.com
+  - datadome.co
+  - browserleaks.com
+
+  # Common dependencies - trim to what you actually need:
+  # - googleapis.com
+  # - gstatic.com
+  # - cloudflare.com
+  # - jsdelivr.net
+
+# The page each session opens on. Must be inside the whitelist.
+start_page: "https://etsy.com"
+
+# --- Kiosk user accounts -------------------------------------------
+# One per person. Passwords are set interactively after the first run
+# (see README) so they never live in this repo.
+kiosk_users:
+  - test
+
+# --- Sizing ---------------------------------------------------------
+# 4 GB host  -> 3 (2 comfortable, 3 tight)
+# 8 GB host  -> 5
+# 16 GB host -> 10
+max_sessions: 3
+
+# Reap sessions abandoned this long, in seconds. 0 = never reap.
+disconnected_time_limit: 3600
+
+# --- Desktop realism -------------------------------------------------
+# "kiosk"   = minimal Openbox + Chromium, maximum lockdown.
+#             Looks headless to bot-detection systems.
+# "desktop" = full XFCE + Google Chrome, fonts, Mesa WebGL, audio.
+#             Looks like an ordinary Linux workstation.
+#
+# Squid and nftables are IDENTICAL in both modes. Only the parts a
+# website can actually observe change.
+#
+# TRADE-OFF: in "desktop" mode a user has a file manager and terminal,
+# so saved browser passwords are recoverable by whoever is logged in.
+desktop_mode: desktop
+
+# Install Microsoft core fonts (Arial, Times New Roman, Verdana...).
+# Strongest single font-fingerprint signal, but pulls from a third
+# party and accepts a EULA. Set false if that bothers you.
+install_mscorefonts: true
+
+# --- Deployment target ----------------------------------------------
+# "baremetal" applies laptop power/lid handling and enables zram.
+# "vm"        skips both. Use this when you redeploy to a guest later.
+target_type: vm
+
+# zram compressed swap. Essential on 4 GB, harmless elsewhere.
+enable_zram: true
+zram_percent: 50
+
+# --- Network --------------------------------------------------------
+# Keep true until you've CONFIRMED you can SSH in over Tailscale.
+# Then flip to false so the box has zero exposed LAN surface.
+allow_lan_ssh: true
+
+# Squid listens here; the browser is pointed at it and the firewall
+# makes it the only route out.
+proxy_port: 3128
+
+# Set false once the whitelist has settled. Keep true while tuning -
+# the access log is how you find the CDN you forgot.
+squid_access_log: true

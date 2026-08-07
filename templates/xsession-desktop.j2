@@ -1,0 +1,17 @@
+#!/bin/sh
+# Managed by Ansible - edits will be overwritten.
+# Full XFCE session. Chrome autostarts via ~/.config/autostart/.
+
+# A real desktop session bus - many APIs behave differently without it
+if [ -z "$DBUS_SESSION_BUS_ADDRESS" ]; then
+  eval "$(dbus-launch --sh-syntax --exit-with-session)"
+fi
+
+# Start the audio server so navigator.mediaDevices sees hardware
+pulseaudio --start --exit-idle-time=-1 2>/dev/null &
+
+export XDG_CURRENT_DESKTOP=XFCE
+export XDG_SESSION_TYPE=x11
+export DESKTOP_SESSION=xfce
+
+exec startxfce4

@@ -1,0 +1,575 @@
+---
+- name: Provision locked-down RDP kiosk server
+  hosts: kiosk
+  become: true
+
+  handlers:
+    - name: restart xrdp
+      ansible.builtin.systemd:
+        name: xrdp
+        state: restarted
+
+    - name: restart squid
+      ansible.builtin.systemd:
+        name: squid
+        state: restarted
+
+    - name: reload nftables
+      ansible.builtin.systemd:
+        name: nftables
+        state: restarted
+
+    - name: restart logind
+      ansible.builtin.systemd:
+        name: systemd-logind
+        state: restarted
+
+    - name: restart zramswap
+      ansible.builtin.systemd:
+        name: zramswap
+        state: restarted
+
+  tasks:
+
+    # ---------------------------------------------------------------
+    # Preflight
+    # ---------------------------------------------------------------
+    - name: Refuse to run on non-Debian
+      ansible.builtin.assert:
+        that: ansible_os_family == "Debian"
+        fail_msg: "This playbook targets Debian. Detected: {{ ansible_os_family }}"
+
+    - name: Warn if start_page is outside the whitelist
+      ansible.builtin.assert:
+        that: >-
+          whitelist_domains | select('in', start_page) | list | length > 0
+        fail_msg: >-
+          start_page ({{ start_page }}) does not match any whitelist_domains
+          entry. The kiosk would open to a blocked page.
+
+    # ---------------------------------------------------------------
+    # Base packages
+    # ---------------------------------------------------------------
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Install base system packages
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - nftables
+          - unattended-upgrades
+          - squid
+        state: present
+        install_recommends: false
+
+    - name: Install X, window manager and browser
+      ansible.builtin.apt:
+        name:
+          - xserver-xorg-core
+          - xserver-xorg-input-all
+          - xserver-xorg-video-fbdev
+          - xinit
+          - x11-xserver-utils
+          - openbox
+          - unclutter
+          - chromium
+          - fonts-dejavu
+        state: present
+        install_recommends: false
+
+    - name: Install xrdp
+      ansible.builtin.apt:
+        name:
+          - xrdp
+          - xorgxrdp
+        state: present
+        install_recommends: false
+
+    - name: Install zram-tools
+      ansible.builtin.apt:
+        name: zram-tools
+        state: present
+        install_recommends: false
+      when: enable_zram | bool
+
+    # ---------------------------------------------------------------
+    # Memory: zram compressed swap
+    # ---------------------------------------------------------------
+    - name: Configure zram swap
+      ansible.builtin.copy:
+        dest: /etc/default/zramswap
+        mode: "0644"
+        content: |
+          # Managed by Ansible
+          ALGO=lz4
+          PERCENT={{ zram_percent }}
+          PRIORITY=100
+      when: enable_zram | bool
+      notify: restart zramswap
+
+    - name: Bias kernel toward using zram before reclaiming page cache
+      ansible.builtin.copy:
+        dest: /etc/sysctl.d/60-kiosk.conf
+        mode: "0644"
+        content: |
+          # Managed by Ansible
+          vm.swappiness = 100
+          vm.vfs_cache_pressure = 50
+      when: enable_zram | bool
+      register: sysctl_conf
+
+    - name: Apply sysctl settings
+      ansible.builtin.command: sysctl --system
+      when: sysctl_conf.changed
+      changed_when: true
+
+    # ---------------------------------------------------------------
+    # Server behaviour: no sleep, ignore the lid
+    # ---------------------------------------------------------------
+    - name: Ensure logind drop-in directory exists
+      ansible.builtin.file:
+        path: /etc/systemd/logind.conf.d
+        state: directory
+        mode: "0755"
+      when: target_type == "baremetal"
+
+    - name: Ignore lid switch and idle
+      ansible.builtin.copy:
+        dest: /etc/systemd/logind.conf.d/kiosk.conf
+        mode: "0644"
+        content: |
+          # Managed by Ansible
+          [Login]
+          HandleLidSwitch=ignore
+          HandleLidSwitchDocked=ignore
+          HandleLidSwitchExternalPower=ignore
+          IdleAction=ignore
+      when: target_type == "baremetal"
+      notify: restart logind
+
+    - name: Mask all sleep targets
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        masked: true
+      loop:
+        - sleep.target
+        - suspend.target
+        - hibernate.target
+        - hybrid-sleep.target
+      when: target_type == "baremetal"
+
+    # ---------------------------------------------------------------
+    # Kiosk users
+    # ---------------------------------------------------------------
+    - name: Create the kiosks group
+      ansible.builtin.group:
+        name: kiosks
+        state: present
+
+    - name: Create kiosk user accounts
+      ansible.builtin.user:
+        name: "{{ item }}"
+        group: kiosks
+        shell: /bin/sh
+        create_home: true
+        password: "!"          # locked; set interactively after first run
+        update_password: on_create
+      loop: "{{ kiosk_users }}"
+
+    - name: Create Openbox config directory for each user
+      ansible.builtin.file:
+        path: "/home/{{ item }}/.config/openbox"
+        state: directory
+        owner: "{{ item }}"
+        group: kiosks
+        mode: "0755"
+      loop: "{{ kiosk_users }}"
+
+    - name: Install stripped Openbox config
+      ansible.builtin.copy:
+        src: files/openbox-rc.xml
+        dest: "/home/{{ item }}/.config/openbox/rc.xml"
+        owner: "{{ item }}"
+        group: kiosks
+        mode: "0644"
+      loop: "{{ kiosk_users }}"
+
+    - name: Install kiosk session script
+      ansible.builtin.template:
+        src: templates/xsession.j2
+        dest: "/home/{{ item }}/.xsession"
+        owner: "{{ item }}"
+        group: kiosks
+        mode: "0755"
+      loop: "{{ kiosk_users }}"
+
+    # ---------------------------------------------------------------
+    # X server hardening
+    # ---------------------------------------------------------------
+    - name: Ensure xorg.conf.d exists
+      ansible.builtin.file:
+        path: /etc/X11/xorg.conf.d
+        state: directory
+        mode: "0755"
+
+    - name: Block VT switching and Ctrl+Alt+Backspace
+      ansible.builtin.copy:
+        dest: /etc/X11/xorg.conf.d/10-kiosk.conf
+        mode: "0644"
+        content: |
+          # Managed by Ansible
+          Section "ServerFlags"
+              Option "DontVTSwitch" "true"
+              Option "DontZap" "true"
+              Option "AllowClosedown" "false"
+          EndSection
+
+    # ---------------------------------------------------------------
+    # Chromium managed policy - the soft whitelist
+    # ---------------------------------------------------------------
+    - name: Ensure Chromium policy directory exists
+      ansible.builtin.file:
+        path: /etc/chromium/policies/managed
+        state: directory
+        mode: "0755"
+
+    - name: Install Chromium managed policy
+      ansible.builtin.template:
+        src: templates/chromium-policy.json.j2
+        dest: /etc/chromium/policies/managed/kiosk.json
+        mode: "0644"
+        validate: "python3 -c \"import json,sys; json.load(open('%s'))\""
+
+    # ---------------------------------------------------------------
+    # Squid - the hard whitelist
+    # ---------------------------------------------------------------
+    - name: Install Squid domain whitelist
+      ansible.builtin.template:
+        src: templates/squid-whitelist.txt.j2
+        dest: /etc/squid/whitelist.txt
+        mode: "0644"
+      notify: restart squid
+
+    - name: Install Squid configuration
+      ansible.builtin.template:
+        src: templates/squid.conf.j2
+        dest: /etc/squid/squid.conf
+        mode: "0644"
+      notify: restart squid
+
+    - name: Enable Squid
+      ansible.builtin.systemd:
+        name: squid
+        enabled: true
+        state: started
+
+    # ---------------------------------------------------------------
+    # nftables - makes the proxy unavoidable
+    # ---------------------------------------------------------------
+    - name: Install nftables ruleset
+      ansible.builtin.template:
+        src: templates/nftables.conf.j2
+        dest: /etc/nftables.conf
+        mode: "0755"
+        validate: "/usr/sbin/nft -c -f %s"
+      notify: reload nftables
+
+    - name: Enable nftables
+      ansible.builtin.systemd:
+        name: nftables
+        enabled: true
+        state: started
+
+    # ---------------------------------------------------------------
+    # xrdp
+    # ---------------------------------------------------------------
+    - name: Configure xrdp globals
+      ansible.builtin.template:
+        src: templates/xrdp.ini.j2
+        dest: /etc/xrdp/xrdp.ini
+        mode: "0644"
+        backup: true
+      notify: restart xrdp
+
+    - name: Configure xrdp session manager
+      ansible.builtin.template:
+        src: templates/sesman.ini.j2
+        dest: /etc/xrdp/sesman.ini
+        mode: "0644"
+        backup: true
+      notify: restart xrdp
+
+    - name: Allow xrdp to read its TLS key
+      ansible.builtin.user:
+        name: xrdp
+        groups: ssl-cert
+        append: true
+      notify: restart xrdp
+
+    - name: Enable xrdp
+      ansible.builtin.systemd:
+        name: "{{ item }}"
+        enabled: true
+        state: started
+      loop:
+        - xrdp
+        - xrdp-sesman
+
+    # ---------------------------------------------------------------
+    # Unattended upgrades
+    # ---------------------------------------------------------------
+    - name: Enable unattended upgrades
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+        mode: "0644"
+        content: |
+          APT::Periodic::Update-Package-Lists "1";
+          APT::Periodic::Unattended-Upgrade "1";
+
+    - name: Configure automatic reboot for kernel updates
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/51kiosk-reboot
+        mode: "0644"
+        content: |
+          Unattended-Upgrade::Automatic-Reboot "true";
+          Unattended-Upgrade::Automatic-Reboot-Time "04:30";
+          Unattended-Upgrade::Remove-Unused-Dependencies "true";
+
+    # ---------------------------------------------------------------
+    # Tailscale
+    # ---------------------------------------------------------------
+    - name: Add Tailscale signing key
+      ansible.builtin.get_url:
+        url: "https://pkgs.tailscale.com/stable/debian/{{ ansible_distribution_release }}.noarmor.gpg"
+        dest: /usr/share/keyrings/tailscale-archive-keyring.gpg
+        mode: "0644"
+
+    - name: Add Tailscale repository
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [signed-by=/usr/share/keyrings/tailscale-archive-keyring.gpg]
+          https://pkgs.tailscale.com/stable/debian
+          {{ ansible_distribution_release }} main
+        filename: tailscale
+        state: present
+
+    - name: Install Tailscale
+      ansible.builtin.apt:
+        name: tailscale
+        state: present
+        update_cache: true
+
+    - name: Enable Tailscale daemon
+      ansible.builtin.systemd:
+        name: tailscaled
+        enabled: true
+        state: started
+
+
+    # ---------------------------------------------------------------
+    # DESKTOP REALISM MODE
+    # Everything below only runs when desktop_mode == "desktop".
+    # Squid and nftables are unchanged in both modes.
+    # ---------------------------------------------------------------
+
+    - name: Install XFCE desktop environment
+      ansible.builtin.apt:
+        name:
+          - xfce4
+          - xfce4-terminal
+          - dbus-x11
+          - at-spi2-core
+          - xdg-utils
+          - gvfs
+          - polkitd
+          - upower
+        state: present
+        install_recommends: true
+      when: desktop_mode == "desktop"
+
+    - name: Install a realistic font set
+      ansible.builtin.apt:
+        name:
+          - fonts-liberation2
+          - fonts-noto-core
+          - fonts-noto-color-emoji
+          - fonts-noto-cjk
+          - fonts-croscore
+          - fonts-freefont-ttf
+          - fonts-cantarell
+          - fontconfig
+        state: present
+        install_recommends: false
+      when: desktop_mode == "desktop"
+
+    - name: Enable contrib repository for Microsoft fonts
+      ansible.builtin.replace:
+        path: /etc/apt/sources.list.d/debian.sources
+        regexp: '^Components: main.*$'
+        replace: 'Components: main contrib non-free-firmware'
+      when:
+        - desktop_mode == "desktop"
+        - install_mscorefonts | bool
+      register: contrib_enabled
+      failed_when: false
+
+    - name: Pre-accept the Microsoft fonts EULA
+      ansible.builtin.debconf:
+        name: ttf-mscorefonts-installer
+        question: msttcorefonts/accepted-mscorefonts-eula
+        value: "true"
+        vtype: select
+      when:
+        - desktop_mode == "desktop"
+        - install_mscorefonts | bool
+
+    - name: Install Microsoft core fonts
+      ansible.builtin.apt:
+        name: ttf-mscorefonts-installer
+        state: present
+        update_cache: true
+      when:
+        - desktop_mode == "desktop"
+        - install_mscorefonts | bool
+      register: mscorefonts
+      failed_when: false
+
+    - name: Rebuild the font cache
+      ansible.builtin.command: fc-cache -f
+      when: desktop_mode == "desktop"
+      changed_when: true
+
+    - name: Install Mesa for software-rendered WebGL
+      ansible.builtin.apt:
+        name:
+          - libgl1-mesa-dri
+          - libglx-mesa0
+          - mesa-utils
+          - mesa-vulkan-drivers
+        state: present
+        install_recommends: false
+      when: desktop_mode == "desktop"
+
+    - name: Install an audio stack
+      ansible.builtin.apt:
+        name:
+          - pulseaudio
+          - pulseaudio-utils
+          - alsa-utils
+        state: present
+        install_recommends: false
+      when: desktop_mode == "desktop"
+
+    - name: Provide a virtual audio device
+      ansible.builtin.lineinfile:
+        path: /etc/pulse/default.pa
+        line: "load-module module-null-sink sink_name=Speakers sink_properties=device.description=Speakers"
+        state: present
+      when: desktop_mode == "desktop"
+
+    - name: Provide a virtual microphone
+      ansible.builtin.lineinfile:
+        path: /etc/pulse/default.pa
+        line: "load-module module-virtual-source source_name=Microphone source_properties=device.description=Microphone"
+        state: present
+      when: desktop_mode == "desktop"
+
+    # ---------------------------------------------------------------
+    # Google Chrome (more ordinary than Debian's Chromium)
+    # ---------------------------------------------------------------
+    - name: Add Google Chrome signing key
+      ansible.builtin.get_url:
+        url: https://dl.google.com/linux/linux_signing_key.pub
+        dest: /usr/share/keyrings/google-chrome.asc
+        mode: "0644"
+      when: desktop_mode == "desktop"
+
+    - name: Add Google Chrome repository
+      ansible.builtin.deb822_repository:
+        name: google-chrome
+        types: deb
+        uris: https://dl.google.com/linux/chrome/deb
+        suites: stable
+        components: main
+        signed_by: /usr/share/keyrings/google-chrome.asc
+        architectures: amd64
+        state: present
+      when: desktop_mode == "desktop"
+
+    - name: Install Google Chrome
+      ansible.builtin.apt:
+        name: google-chrome-stable
+        state: present
+        update_cache: true
+      when: desktop_mode == "desktop"
+
+    - name: Ensure Chrome policy directory exists
+      ansible.builtin.file:
+        path: /etc/opt/chrome/policies/managed
+        state: directory
+        mode: "0755"
+      when: desktop_mode == "desktop"
+
+    - name: Install relaxed Chrome policy
+      ansible.builtin.template:
+        src: templates/chrome-policy-desktop.json.j2
+        dest: /etc/opt/chrome/policies/managed/kiosk.json
+        mode: "0644"
+        validate: "python3 -c \"import json,sys; json.load(open('%s'))\""
+      when: desktop_mode == "desktop"
+
+    # ---------------------------------------------------------------
+    # Session: XFCE instead of bare Openbox
+    # ---------------------------------------------------------------
+    - name: Install XFCE session script
+      ansible.builtin.template:
+        src: templates/xsession-desktop.j2
+        dest: "/home/{{ item }}/.xsession"
+        owner: "{{ item }}"
+        group: kiosks
+        mode: "0755"
+      loop: "{{ kiosk_users }}"
+      when: desktop_mode == "desktop"
+
+    - name: Create autostart directory
+      ansible.builtin.file:
+        path: "/home/{{ item }}/.config/autostart"
+        state: directory
+        owner: "{{ item }}"
+        group: kiosks
+        mode: "0755"
+      loop: "{{ kiosk_users }}"
+      when: desktop_mode == "desktop"
+
+    - name: Autostart Chrome at login
+      ansible.builtin.template:
+        src: templates/chrome-autostart.desktop.j2
+        dest: "/home/{{ item }}/.config/autostart/chrome.desktop"
+        owner: "{{ item }}"
+        group: kiosks
+        mode: "0644"
+      loop: "{{ kiosk_users }}"
+      when: desktop_mode == "desktop"
+
+    # ---------------------------------------------------------------
+    # Post-run guidance
+    # ---------------------------------------------------------------
+    - name: Check Tailscale connection state
+      ansible.builtin.command: tailscale status --json
+      register: ts_status
+      changed_when: false
+      failed_when: false
+
+    - name: Next steps
+      ansible.builtin.debug:
+        msg:
+          - "Build complete."
+          - "1. Set kiosk passwords:  sudo passwd {{ kiosk_users | join(' / sudo passwd ') }}"
+          - "2. Join tailnet:         sudo tailscale up"
+          - "3. Disable key expiry for this node in the Tailscale admin console."
+          - "4. Run ./verify.sh to confirm the firewall and proxy are doing their job."
+          - "Tailscale currently up: {{ 'yes' if ts_status.rc == 0 and 'Self' in ts_status.stdout else 'NO - run tailscale up' }}"

@@ -1,0 +1,42 @@
+#!/bin/sh
+# Managed by Ansible - edits will be overwritten.
+# Launched by xrdp via /etc/xrdp/startwm.sh -> Xsession -> ~/.xsession
+
+# Never blank or sleep the virtual display
+xset s off
+xset s noblank
+xset -dpms
+
+# Hide the pointer after 5s idle
+unclutter -idle 5 -root &
+
+# Window manager: stripped Openbox, no menu, no keybindings
+openbox &
+
+# Clear any "Chromium didn't shut down correctly" state so no
+# restore bubble appears on launch
+PROFILE="$HOME/.config/chromium/Default/Preferences"
+[ -f "$PROFILE" ] && sed -i 's/"exit_type":"Crashed"/"exit_type":"Normal"/' "$PROFILE"
+
+# Relaunch loop: if the user closes the browser (Alt+F4, Ctrl+W on the
+# last tab), they get it back rather than a bare desktop.
+while true; do
+  chromium \
+    --kiosk \
+    --no-first-run \
+    --noerrdialogs \
+    --disable-infobars \
+    --disable-session-crashed-bubble \
+    --disable-features=TranslateUI \
+    --disable-gpu \
+    --disable-dev-shm-usage \
+    --check-for-update-interval=31536000 \
+    --start-maximized \
+{% if memory_constrained | default(true) %}
+    --process-per-site \
+    --renderer-process-limit=4 \
+    --disk-cache-size=52428800 \
+{% endif %}
+    "{{ start_page }}"
+  sleep 2
+done

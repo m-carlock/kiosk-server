@@ -1,0 +1,47 @@
+{
+  "_comment": "Managed by Ansible. Desktop-realism mode: URL whitelist retained, cosmetic lockdown relaxed so the browser fingerprints as ordinary.",
+
+  "URLBlocklist": [
+    "*",
+    "file://*",
+    "view-source:*",
+    "javascript://*"
+  ],
+
+  "URLAllowlist": [
+{% for d in whitelist_domains %}
+    "{{ d }}",
+    "*.{{ d }}"{{ "," if not loop.last else "" }}
+{% endfor %}
+  ],
+
+  "ProxyMode": "fixed_servers",
+  "ProxyServer": "127.0.0.1:{{ proxy_port }}",
+  "ProxyBypassList": "",
+
+  "RestoreOnStartup": 4,
+  "RestoreOnStartupURLs": ["{{ start_page }}"],
+  "HomepageLocation": "{{ start_page }}",
+
+  "PasswordManagerEnabled": true,
+  "PasswordLeakDetectionEnabled": false,
+
+  "BrowserSignin": 1,
+  "SyncDisabled": false,
+  "MetricsReportingEnabled": false,
+  "SafeBrowsingProtectionLevel": 0,
+  "ComponentUpdatesEnabled": false,
+
+  "DownloadRestrictions": 3,
+  "PrintingEnabled": false,
+  "IncognitoModeAvailability": 1,
+  "ExtensionInstallBlocklist": ["*"],
+
+  "DefaultGeolocationSetting": 3,
+  "DefaultNotificationsSetting": 3,
+  "DefaultPopupsSetting": 2,
+
+  "PromotionalTabsEnabled": false,
+  "WelcomePageOnOSUpgradeEnabled": false,
+  "DefaultBrowserSettingEnabled": false
+}

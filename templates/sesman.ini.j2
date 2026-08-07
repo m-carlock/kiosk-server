@@ -1,0 +1,41 @@
+; Managed by Ansible - edits will be overwritten.
+
+[Globals]
+ListenAddress=127.0.0.1
+ListenPort=3350
+EnableUserWindowManager=true
+UserWindowManager=startwm.sh
+DefaultWindowManager=startwm.sh
+ReconnectScript=reconnectwm.sh
+
+[Security]
+AllowRootLogin=false
+MaxLoginRetry=3
+TerminalServerUsers=kiosks
+TerminalServerAdmins=sudo
+AlwaysGroupCheck=true
+RestrictOutboundClipboard=all
+RestrictInboundClipboard=all
+
+[Sessions]
+X11DisplayOffset=10
+MaxSessions={{ max_sessions }}
+KillDisconnected=false
+DisconnectedTimeLimit={{ disconnected_time_limit }}
+IdleTimeLimit=0
+Policy=Default
+
+[Logging]
+LogFile=/var/log/xrdp-sesman.log
+LogLevel=INFO
+EnableSyslog=true
+
+[Xorg]
+param=/usr/lib/xorg/Xorg
+param=-config
+param=xrdp/xorg.conf
+param=-noreset
+param=-nolisten
+param=tcp
+param=-logfile
+param=.xorgxrdp.%s.log

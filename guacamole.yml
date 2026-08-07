@@ -1,0 +1,438 @@
+---
+- name: Provision Guacamole HTTPS gateway
+  hosts: guacamole
+  become: true
+
+  handlers:
+    - name: restart caddy
+      ansible.builtin.systemd:
+        name: caddy
+        state: restarted
+
+    - name: restart fail2ban
+      ansible.builtin.systemd:
+        name: fail2ban
+        state: restarted
+
+    - name: reload nftables
+      ansible.builtin.systemd:
+        name: nftables
+        state: restarted
+
+    - name: reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+  tasks:
+
+    # ---------------------------------------------------------------
+    # Preflight
+    # ---------------------------------------------------------------
+    - name: Require secrets to be set
+      ansible.builtin.assert:
+        that:
+          - cloudflare_token is defined
+          - cloudflare_token | length > 20
+          - guac_db_password is defined
+          - guac_db_password | length >= 16
+        fail_msg: >-
+          Missing or weak secrets. Create group_vars/secrets.yml with
+          ansible-vault and define vault_cloudflare_token and
+          vault_guac_db_password (16+ chars).
+
+    - name: Require a real domain
+      ansible.builtin.assert:
+        that:
+          - guac_domain != "remote.yourdomain.com"
+          - guac_domain is search('\.')
+        fail_msg: "Set guac_domain in group_vars/guacamole.yml"
+
+    - name: Require the kiosk address
+      ansible.builtin.assert:
+        that: kiosk_tailscale_ip != "100.x.y.z"
+        fail_msg: >-
+          Set kiosk_tailscale_ip. Get it by running
+          'tailscale ip -4' on the kiosk box.
+
+    # ---------------------------------------------------------------
+    # Base packages
+    # ---------------------------------------------------------------
+    - name: Install base packages
+      ansible.builtin.apt:
+        name:
+          - ca-certificates
+          - curl
+          - gnupg
+          - nftables
+          - openssl
+          - python3
+          - unattended-upgrades
+        state: present
+        update_cache: true
+        install_recommends: false
+
+    - name: Install fail2ban
+      ansible.builtin.apt:
+        name: fail2ban
+        state: present
+        install_recommends: false
+      when: enable_fail2ban | bool
+
+    # ---------------------------------------------------------------
+    # Docker
+    # ---------------------------------------------------------------
+    - name: Add Docker signing key
+      ansible.builtin.get_url:
+        url: https://download.docker.com/linux/debian/gpg
+        dest: /usr/share/keyrings/docker.asc
+        mode: "0644"
+
+    - name: Add Docker repository
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [arch=amd64 signed-by=/usr/share/keyrings/docker.asc]
+          https://download.docker.com/linux/debian
+          {{ ansible_distribution_release }} stable
+        filename: docker
+        state: present
+
+    - name: Install Docker Engine and Compose plugin
+      ansible.builtin.apt:
+        name:
+          - docker-ce
+          - docker-ce-cli
+          - containerd.io
+          - docker-compose-plugin
+        state: present
+        update_cache: true
+
+    - name: Enable Docker
+      ansible.builtin.systemd:
+        name: docker
+        enabled: true
+        state: started
+
+    # ---------------------------------------------------------------
+    # Guacamole stack
+    # ---------------------------------------------------------------
+    - name: Create Guacamole directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        mode: "0750"
+      loop:
+        - "{{ guac_data_dir }}"
+        - "{{ guac_data_dir }}/pgdata"
+        - "{{ guac_data_dir }}/initdb"
+
+    - name: Check whether the database schema has been generated
+      ansible.builtin.stat:
+        path: "{{ guac_data_dir }}/initdb/001-schema.sql"
+      register: schema_file
+
+    - name: Generate the Guacamole PostgreSQL schema
+      ansible.builtin.shell:
+        cmd: >-
+          docker run --rm guacamole/guacamole:1.6.0
+          /opt/guacamole/bin/initdb.sh --postgresql
+          > {{ guac_data_dir }}/initdb/001-schema.sql
+        creates: "{{ guac_data_dir }}/initdb/001-schema.sql"
+      when: not schema_file.stat.exists
+
+    - name: Install docker-compose.yml
+      ansible.builtin.template:
+        src: templates/guac/docker-compose.yml.j2
+        dest: "{{ guac_data_dir }}/docker-compose.yml"
+        mode: "0600"
+      register: compose_file
+
+    - name: Bring up the Guacamole stack
+      ansible.builtin.command:
+        cmd: docker compose up -d
+        chdir: "{{ guac_data_dir }}"
+      when: compose_file.changed
+      changed_when: true
+
+    # ---------------------------------------------------------------
+    # Caddy with the Cloudflare DNS plugin
+    # ---------------------------------------------------------------
+    - name: Add Caddy signing key
+      ansible.builtin.get_url:
+        url: https://dl.cloudsmith.io/public/caddy/stable/gpg.key
+        dest: /usr/share/keyrings/caddy-stable.asc
+        mode: "0644"
+
+    - name: Add Caddy repository
+      ansible.builtin.apt_repository:
+        repo: >-
+          deb [signed-by=/usr/share/keyrings/caddy-stable.asc]
+          https://dl.cloudsmith.io/public/caddy/stable/deb/debian
+          any-version main
+        filename: caddy-stable
+        state: present
+
+    - name: Install Caddy
+      ansible.builtin.apt:
+        name: caddy
+        state: present
+        update_cache: true
+
+    - name: Check for the Cloudflare DNS module
+      ansible.builtin.command: caddy list-modules
+      register: caddy_modules
+      changed_when: false
+
+    - name: Add the Cloudflare DNS module to Caddy
+      ansible.builtin.command: caddy add-package github.com/caddy-dns/cloudflare
+      when: "'dns.providers.cloudflare' not in caddy_modules.stdout"
+      changed_when: true
+      notify: restart caddy
+
+    - name: Create Caddy directories
+      ansible.builtin.file:
+        path: "{{ item }}"
+        state: directory
+        owner: root
+        group: caddy
+        mode: "0750"
+      loop:
+        - /etc/caddy/clients
+        - /var/log/caddy
+
+    - name: Store the Cloudflare API token
+      ansible.builtin.copy:
+        content: "{{ cloudflare_token }}"
+        dest: /etc/caddy/cloudflare.token
+        owner: root
+        group: caddy
+        mode: "0640"
+      no_log: true
+
+    - name: Provide the token to Caddy as an environment variable
+      ansible.builtin.copy:
+        content: "CF_API_TOKEN={{ cloudflare_token }}\n"
+        dest: /etc/caddy/caddy.env
+        owner: root
+        group: caddy
+        mode: "0640"
+      no_log: true
+      notify: restart caddy
+
+    - name: Create systemd drop-in directory for Caddy
+      ansible.builtin.file:
+        path: /etc/systemd/system/caddy.service.d
+        state: directory
+        mode: "0755"
+
+    - name: Load the environment file into the Caddy unit
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/caddy.service.d/env.conf
+        mode: "0644"
+        content: |
+          [Service]
+          EnvironmentFile=/etc/caddy/caddy.env
+      notify:
+        - reload systemd
+        - restart caddy
+
+    # ---------------------------------------------------------------
+    # Client certificates (mTLS)
+    # ---------------------------------------------------------------
+    - name: Install the client certificate helper
+      ansible.builtin.copy:
+        src: files/guac/make-client-cert.sh
+        dest: /usr/local/bin/make-client-cert.sh
+        mode: "0700"
+
+    - name: Issue a client certificate for each helper
+      ansible.builtin.command:
+        cmd: "/usr/local/bin/make-client-cert.sh {{ item }} {{ mtls_cert_days }}"
+        creates: "/etc/caddy/clients/{{ item }}.p12"
+      loop: "{{ mtls_clients }}"
+      register: cert_output
+
+    - name: Make the CA readable by Caddy
+      ansible.builtin.file:
+        path: /etc/caddy/clients/ca.crt
+        owner: root
+        group: caddy
+        mode: "0644"
+
+    - name: Install the Caddyfile
+      ansible.builtin.template:
+        src: templates/guac/Caddyfile.j2
+        dest: /etc/caddy/Caddyfile
+        owner: root
+        group: caddy
+        mode: "0640"
+        validate: "caddy validate --adapter caddyfile --config %s"
+      notify: restart caddy
+
+    - name: Enable Caddy
+      ansible.builtin.systemd:
+        name: caddy
+        enabled: true
+        state: started
+
+    # ---------------------------------------------------------------
+    # Dynamic DNS
+    # ---------------------------------------------------------------
+    - name: Install the DDNS update script
+      ansible.builtin.template:
+        src: templates/guac/ddns-update.sh.j2
+        dest: /usr/local/bin/ddns-update.sh
+        mode: "0700"
+
+    - name: Install the DDNS systemd service
+      ansible.builtin.template:
+        src: templates/guac/ddns-update.service.j2
+        dest: /etc/systemd/system/ddns-update.service
+        mode: "0644"
+      notify: reload systemd
+
+    - name: Install the DDNS systemd timer
+      ansible.builtin.template:
+        src: templates/guac/ddns-update.timer.j2
+        dest: /etc/systemd/system/ddns-update.timer
+        mode: "0644"
+      notify: reload systemd
+
+    - name: Flush handlers so the timer unit exists before enabling
+      ansible.builtin.meta: flush_handlers
+
+    - name: Enable the DDNS timer
+      ansible.builtin.systemd:
+        name: ddns-update.timer
+        enabled: true
+        state: started
+
+    - name: Run DDNS once now
+      ansible.builtin.command: /usr/local/bin/ddns-update.sh
+      register: ddns_first_run
+      changed_when: "'updated' in ddns_first_run.stdout"
+      failed_when: ddns_first_run.rc != 0
+
+    # ---------------------------------------------------------------
+    # fail2ban
+    # ---------------------------------------------------------------
+    - name: Install the Guacamole fail2ban filter
+      ansible.builtin.copy:
+        dest: /etc/fail2ban/filter.d/guacamole.conf
+        mode: "0644"
+        content: |
+          # Managed by Ansible
+          # Matches failed auth attempts in Caddy's JSON access log.
+          [Definition]
+          failregex = ^.*"remote_ip":"<HOST>".*"uri":"/guacamole/api/tokens".*"status":(401|403).*$
+          ignoreregex =
+      when: enable_fail2ban | bool
+      notify: restart fail2ban
+
+    - name: Install the Guacamole fail2ban jail
+      ansible.builtin.copy:
+        dest: /etc/fail2ban/jail.d/guacamole.local
+        mode: "0644"
+        content: |
+          # Managed by Ansible
+          [guacamole]
+          enabled  = true
+          filter   = guacamole
+          logpath  = /var/log/caddy/access.log
+          backend  = auto
+          maxretry = 5
+          findtime = 600
+          bantime  = 3600
+          action   = nftables[type=allports]
+
+          [sshd]
+          enabled  = true
+          maxretry = 3
+          bantime  = 3600
+      when: enable_fail2ban | bool
+      notify: restart fail2ban
+
+    - name: Enable fail2ban
+      ansible.builtin.systemd:
+        name: fail2ban
+        enabled: true
+        state: started
+      when: enable_fail2ban | bool
+
+    # ---------------------------------------------------------------
+    # Firewall
+    # ---------------------------------------------------------------
+    - name: Install nftables ruleset
+      ansible.builtin.copy:
+        dest: /etc/nftables.conf
+        mode: "0755"
+        validate: "/usr/sbin/nft -c -f %s"
+        content: |
+          #!/usr/sbin/nft -f
+          # Managed by Ansible - edits will be overwritten.
+          flush ruleset
+
+          table inet filter {
+            chain input {
+              type filter hook input priority 0; policy drop;
+
+              ct state established,related accept
+              ct state invalid drop
+              iif lo accept
+
+              # The only publicly exposed port.
+              tcp dport 443 accept
+
+              # Admin access over the LAN / tailnet.
+              tcp dport 22 accept
+              iifname "tailscale0" accept
+              udp dport 41641 accept
+
+              ip protocol icmp accept
+              ip6 nexthdr ipv6-icmp accept
+            }
+
+            chain forward {
+              type filter hook forward priority 0; policy accept;
+            }
+
+            chain output {
+              type filter hook output priority 0; policy accept;
+            }
+          }
+      notify: reload nftables
+
+    - name: Enable nftables
+      ansible.builtin.systemd:
+        name: nftables
+        enabled: true
+        state: started
+
+    # ---------------------------------------------------------------
+    # Unattended upgrades
+    # ---------------------------------------------------------------
+    - name: Enable unattended upgrades
+      ansible.builtin.copy:
+        dest: /etc/apt/apt.conf.d/20auto-upgrades
+        mode: "0644"
+        content: |
+          APT::Periodic::Update-Package-Lists "1";
+          APT::Periodic::Unattended-Upgrade "1";
+
+    # ---------------------------------------------------------------
+    # Summary
+    # ---------------------------------------------------------------
+    - name: Next steps
+      ansible.builtin.debug:
+        msg:
+          - "Guacamole gateway ready at https://{{ guac_domain }}"
+          - ""
+          - "1. Forward TCP 443 on your Fios router to this machine."
+          - "2. Log in at the URL above as guacadmin / guacadmin."
+          - "   CHANGE THAT PASSWORD IMMEDIATELY."
+          - "3. Create an RDP connection to {{ kiosk_tailscale_ip }}:{{ kiosk_rdp_port }}"
+          - "4. Create one Guacamole user per helper, enable TOTP."
+          - "5. Client certs are in /etc/caddy/clients/*.p12"
+          - "   Re-run make-client-cert.sh to see import passwords again,"
+          - "   or check the output of this run above."
+          - ""
+          - "Verify with: ./verify-guac.sh"

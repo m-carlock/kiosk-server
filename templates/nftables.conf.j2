@@ -1,0 +1,40 @@
+#!/usr/sbin/nft -f
+# Managed by Ansible - edits will be overwritten.
+flush ruleset
+
+table inet filter {
+  chain input {
+    type filter hook input priority 0; policy drop;
+
+    ct state established,related accept
+    ct state invalid drop
+    iif lo accept
+
+    # Tailscale: the only way in
+    iifname "tailscale0" accept
+    udp dport 41641 accept
+
+    ip protocol icmp accept
+    ip6 nexthdr ipv6-icmp accept
+
+{% if allow_lan_ssh %}
+    # LAN SSH - set allow_lan_ssh=false once Tailscale is proven
+    tcp dport 22 accept
+{% endif %}
+  }
+
+  chain forward {
+    type filter hook forward priority 0; policy drop;
+  }
+
+  chain output {
+    type filter hook output priority 0; policy accept;
+
+    # Loopback first, so kiosk users can still reach Squid on 127.0.0.1
+    oif lo accept
+
+    # Everything else from the kiosks group is dropped. Squid runs as
+    # the 'proxy' user, so its outbound traffic is unaffected.
+    skgid "kiosks" counter drop
+  }
+}

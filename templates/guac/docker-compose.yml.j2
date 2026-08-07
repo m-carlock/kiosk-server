@@ -1,0 +1,54 @@
+# Managed by Ansible - edits will be overwritten.
+services:
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: guac-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: guacamole_db
+      POSTGRES_USER: guacamole
+      POSTGRES_PASSWORD: "{{ guac_db_password }}"
+    volumes:
+      - {{ guac_data_dir }}/pgdata:/var/lib/postgresql/data
+      - {{ guac_data_dir }}/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U guacamole -d guacamole_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks: [guacnet]
+
+  guacd:
+    image: guacamole/guacd:1.6.0
+    container_name: guacd
+    restart: unless-stopped
+    networks: [guacnet]
+
+  guacamole:
+    image: guacamole/guacamole:1.6.0
+    container_name: guacamole
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      guacd:
+        condition: service_started
+    environment:
+      GUACD_HOSTNAME: guacd
+      POSTGRESQL_HOSTNAME: postgres
+      POSTGRESQL_DATABASE: guacamole_db
+      POSTGRESQL_USER: guacamole
+      POSTGRESQL_PASSWORD: "{{ guac_db_password }}"
+      POSTGRESQL_AUTO_CREATE_ACCOUNTS: "false"
+      TOTP_ENABLED: "true"
+      # Caddy terminates TLS and is the only thing that talks to us.
+      REMOTE_IP_VALVE_ENABLED: "true"
+      PROXY_ALLOWED_IPS_REGEX: '172\.(1[6-9]|2[0-9]|3[01])\.\d+\.\d+|127\.0\.0\.1'
+    ports:
+      - "127.0.0.1:{{ guac_listen_port }}:8080"
+    networks: [guacnet]
+
+networks:
+  guacnet:
+    driver: bridge
