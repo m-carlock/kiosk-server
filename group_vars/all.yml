@@ -27,7 +27,7 @@ whitelist_domains:
   # - jsdelivr.net
 
 # The page each session opens on. Must be inside the whitelist.
-start_page: "https://etsy.com"
+start_page: "https://google.com"
 
 # --- Kiosk user accounts -------------------------------------------
 # One per person. Passwords are set interactively after the first run

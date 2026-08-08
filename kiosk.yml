@@ -29,6 +29,10 @@
         name: zramswap
         state: restarted
 
+    - name: reload systemd
+      ansible.builtin.systemd:
+        daemon_reload: true
+
   tasks:
 
     # ---------------------------------------------------------------
@@ -197,6 +201,7 @@
         group: kiosks
         mode: "0644"
       loop: "{{ kiosk_users }}"
+      when: desktop_mode == "kiosk"
 
     - name: Install kiosk session script
       ansible.builtin.template:
@@ -206,6 +211,7 @@
         group: kiosks
         mode: "0755"
       loop: "{{ kiosk_users }}"
+      when: desktop_mode == "kiosk"
 
     # ---------------------------------------------------------------
     # X server hardening
@@ -236,6 +242,7 @@
         path: /etc/chromium/policies/managed
         state: directory
         mode: "0755"
+      when: desktop_mode == "kiosk"
 
     - name: Install Chromium managed policy
       ansible.builtin.template:
@@ -243,6 +250,7 @@
         dest: /etc/chromium/policies/managed/kiosk.json
         mode: "0644"
         validate: "python3 -c \"import json,sys; json.load(open('%s'))\""
+      when: desktop_mode == "kiosk"
 
     # ---------------------------------------------------------------
     # Squid - the hard whitelist
@@ -260,6 +268,34 @@
         dest: /etc/squid/squid.conf
         mode: "0644"
       notify: restart squid
+
+    - name: Ensure Squid systemd drop-in directory exists
+      ansible.builtin.file:
+        path: /etc/systemd/system/squid.service.d
+        state: directory
+        mode: "0755"
+
+    - name: Make Squid wait for working DNS before starting
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/squid.service.d/network-ready.conf
+        mode: "0644"
+        content: |
+          # Managed by Ansible.
+          # Squid reads /etc/resolv.conf once at startup. Starting before
+          # DNS is ready means it resolves nothing, and every request
+          # returns TCP_TUNNEL/503 with HIER_NONE until restarted.
+          [Unit]
+          After=network-online.target nss-lookup.target
+          Wants=network-online.target
+
+          [Service]
+          # nss-lookup.target is weakly implemented on Debian, so poll for
+          # a working resolver too. Bounded at 30s, always exits 0, so a
+          # DNS outage can never block boot.
+          ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do getent hosts one.one.one.one >/dev/null 2>&1 && exit 0; sleep 1; done; exit 0'
+      notify:
+        - reload systemd
+        - restart squid
 
     - name: Enable Squid
       ansible.builtin.systemd:
