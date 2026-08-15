@@ -83,3 +83,6 @@ proxy_port: 3128
 # Set false once the whitelist has settled. Keep true while tuning -
 # the access log is how you find the CDN you forgot.
 squid_access_log: true
+
+# LAN IP of my Guacamole VM box
+guac_host_ip: 192.168.1.57

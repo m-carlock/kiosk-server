@@ -5,13 +5,13 @@
 
 # --- Your domain ---------------------------------------------------
 # You must own this and its nameservers must point at Cloudflare.
-guac_domain: "remote.yourdomain.com"
+guac_domain: "cbc.salesinusa.com"
 
 # Cloudflare zone = the root domain, not the subdomain above.
-cloudflare_zone: "yourdomain.com"
+cloudflare_zone: "salesinusa.com"
 
 # Email for Let's Encrypt expiry notices.
-acme_email: "you@yourdomain.com"
+acme_email: "maxtruf@gmail.com"
 
 # --- Secrets -------------------------------------------------------
 # DO NOT put real values here. Create secrets.yml with ansible-vault:
@@ -29,7 +29,7 @@ guac_db_password: "{{ vault_guac_db_password }}"
 
 # --- Where the kiosk lives -----------------------------------------
 # Tailscale address of the kiosk VM. Guacamole speaks RDP to this.
-kiosk_tailscale_ip: "100.x.y.z"
+kiosk_tailscale_ip: "192.168.1.55"
 kiosk_rdp_port: 3389
 
 # --- DDNS ----------------------------------------------------------
