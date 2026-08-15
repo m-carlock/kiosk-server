@@ -64,6 +64,7 @@
         name:
           - ca-certificates
           - curl
+          - gnupg
           - nftables
           - unattended-upgrades
           - squid
