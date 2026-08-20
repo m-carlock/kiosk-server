@@ -34,6 +34,9 @@ start_page: "https://google.com"
 # (see README) so they never live in this repo.
 kiosk_users:
   - test
+  - kiosk1
+  - kiosk2
+  - kiosk3
 
 # --- Sizing ---------------------------------------------------------
 # 4 GB host  -> 3 (2 comfortable, 3 tight)
