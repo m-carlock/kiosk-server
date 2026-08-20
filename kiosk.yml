@@ -282,18 +282,22 @@
         mode: "0644"
         content: |
           # Managed by Ansible.
-          # Squid reads /etc/resolv.conf once at startup. Starting before
-          # DNS is ready means it resolves nothing, and every request
-          # returns TCP_TUNNEL/503 with HIER_NONE until restarted.
+          # Squid reads /etc/resolv.conf once at startup and caches it.
+          # If it starts before DNS is up it resolves nothing, and every
+          # request returns TCP_TUNNEL/503 with HIER_NONE.
           [Unit]
           After=network-online.target nss-lookup.target
           Wants=network-online.target
 
           [Service]
-          # nss-lookup.target is weakly implemented on Debian, so poll for
-          # a working resolver too. Bounded at 30s, always exits 0, so a
-          # DNS outage can never block boot.
-          ExecStartPre=/bin/sh -c 'for i in $(seq 1 30); do getent hosts one.one.one.one >/dev/null 2>&1 && exit 0; sleep 1; done; exit 0'
+          # Wait for a working resolver, up to 60s. Unlike the previous
+          # version this FAILS if DNS never comes up, so the Restart=
+          # directive below can retry rather than starting broken.
+          ExecStartPre=/bin/sh -c 'for i in $(seq 1 60); do getent hosts one.one.one.one >/dev/null 2>&1 && exit 0; sleep 1; done; exit 1'
+          Restart=on-failure
+          RestartSec=15s
+          StartLimitBurst=10
+          StartLimitIntervalSec=300
       notify:
         - reload systemd
         - restart squid

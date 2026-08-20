@@ -11,12 +11,6 @@
     tls {
         # DNS-01 challenge via Cloudflare - port 80 is never used.
         dns cloudflare {env.CF_API_TOKEN}
-
-        # Mutual TLS: reject anything without a client cert issued by
-        # our CA, before the request ever reaches Guacamole.
-        client_auth {
-            mode require_and_verify
-            trust_pool file /etc/caddy/clients/ca.crt
         }
     }
 

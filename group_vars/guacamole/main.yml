@@ -2,6 +2,7 @@
 # ============================================================
 #  Guacamole gateway settings. Edit the top block only.
 # ============================================================
+enable_caddy: false
 
 # --- Your domain ---------------------------------------------------
 # You must own this and its nameservers must point at Cloudflare.

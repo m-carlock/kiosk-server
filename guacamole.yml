@@ -119,7 +119,7 @@
       ansible.builtin.file:
         path: "{{ item }}"
         state: directory
-        mode: "0750"
+        mode: "0755"
       loop:
         - "{{ guac_data_dir }}"
         - "{{ guac_data_dir }}/pgdata"
@@ -161,6 +161,7 @@
         url: https://dl.cloudsmith.io/public/caddy/stable/gpg.key
         dest: /usr/share/keyrings/caddy-stable.asc
         mode: "0644"
+      when: enable_caddy | bool
 
     - name: Add Caddy repository
       ansible.builtin.apt_repository:
@@ -170,21 +171,27 @@
           any-version main
         filename: caddy-stable
         state: present
+      when: enable_caddy | bool
 
     - name: Install Caddy
       ansible.builtin.apt:
         name: caddy
         state: present
         update_cache: true
+      when: enable_caddy | bool
 
     - name: Check for the Cloudflare DNS module
       ansible.builtin.command: caddy list-modules
       register: caddy_modules
       changed_when: false
+      when: enable_caddy | bool
 
     - name: Add the Cloudflare DNS module to Caddy
       ansible.builtin.command: caddy add-package github.com/caddy-dns/cloudflare
-      when: "'dns.providers.cloudflare' not in caddy_modules.stdout"
+      when:
+        - enable_caddy | bool
+        - "'dns.providers.cloudflare' not in caddy_modules.stdout | default('')"
+
       changed_when: true
       notify: restart caddy
 
@@ -198,6 +205,7 @@
       loop:
         - /etc/caddy/clients
         - /var/log/caddy
+      when: enable_caddy | bool
 
     - name: Store the Cloudflare API token
       ansible.builtin.copy:
@@ -207,6 +215,7 @@
         group: caddy
         mode: "0640"
       no_log: true
+      when: enable_caddy | bool
 
     - name: Provide the token to Caddy as an environment variable
       ansible.builtin.copy:
@@ -217,12 +226,14 @@
         mode: "0640"
       no_log: true
       notify: restart caddy
+      when: enable_caddy | bool
 
     - name: Create systemd drop-in directory for Caddy
       ansible.builtin.file:
         path: /etc/systemd/system/caddy.service.d
         state: directory
         mode: "0755"
+      when: enable_caddy | bool
 
     - name: Load the environment file into the Caddy unit
       ansible.builtin.copy:
@@ -234,30 +245,11 @@
       notify:
         - reload systemd
         - restart caddy
+      when: enable_caddy | bool
 
     # ---------------------------------------------------------------
     # Client certificates (mTLS)
     # ---------------------------------------------------------------
-    - name: Install the client certificate helper
-      ansible.builtin.copy:
-        src: files/guac/make-client-cert.sh
-        dest: /usr/local/bin/make-client-cert.sh
-        mode: "0700"
-
-    - name: Issue a client certificate for each helper
-      ansible.builtin.command:
-        cmd: "/usr/local/bin/make-client-cert.sh {{ item }} {{ mtls_cert_days }}"
-        creates: "/etc/caddy/clients/{{ item }}.p12"
-      loop: "{{ mtls_clients }}"
-      register: cert_output
-
-    - name: Make the CA readable by Caddy
-      ansible.builtin.file:
-        path: /etc/caddy/clients/ca.crt
-        owner: root
-        group: caddy
-        mode: "0644"
-
     - name: Install the Caddyfile
       ansible.builtin.template:
         src: templates/guac/Caddyfile.j2
@@ -267,12 +259,14 @@
         mode: "0640"
         validate: "caddy validate --adapter caddyfile --config %s"
       notify: restart caddy
+      when: enable_caddy | bool
 
     - name: Enable Caddy
       ansible.builtin.systemd:
         name: caddy
         enabled: true
         state: started
+      when: enable_caddy | bool
 
     # ---------------------------------------------------------------
     # Dynamic DNS
@@ -282,6 +276,7 @@
         src: templates/guac/ddns-update.sh.j2
         dest: /usr/local/bin/ddns-update.sh
         mode: "0700"
+      when: enable_caddy | bool
 
     - name: Install the DDNS systemd service
       ansible.builtin.template:
@@ -289,6 +284,7 @@
         dest: /etc/systemd/system/ddns-update.service
         mode: "0644"
       notify: reload systemd
+      when: enable_caddy | bool
 
     - name: Install the DDNS systemd timer
       ansible.builtin.template:
@@ -296,21 +292,25 @@
         dest: /etc/systemd/system/ddns-update.timer
         mode: "0644"
       notify: reload systemd
+      when: enable_caddy | bool
 
     - name: Flush handlers so the timer unit exists before enabling
       ansible.builtin.meta: flush_handlers
+      when: enable_caddy | bool
 
     - name: Enable the DDNS timer
       ansible.builtin.systemd:
         name: ddns-update.timer
         enabled: true
         state: started
+      when: enable_caddy | bool
 
     - name: Run DDNS once now
       ansible.builtin.command: /usr/local/bin/ddns-update.sh
       register: ddns_first_run
       changed_when: "'updated' in ddns_first_run.stdout"
       failed_when: ddns_first_run.rc != 0
+      when: enable_caddy | bool
 
     # ---------------------------------------------------------------
     # fail2ban

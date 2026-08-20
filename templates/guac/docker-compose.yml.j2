@@ -46,7 +46,7 @@ services:
       REMOTE_IP_VALVE_ENABLED: "true"
       PROXY_ALLOWED_IPS_REGEX: '172\.(1[6-9]|2[0-9]|3[01])\.\d+\.\d+|127\.0\.0\.1'
     ports:
-      - "127.0.0.1:{{ guac_listen_port }}:8080"
+      - "{{ guac_listen_port }}:8080"
     networks: [guacnet]
 
 networks:
