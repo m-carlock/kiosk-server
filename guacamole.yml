@@ -199,12 +199,11 @@
       ansible.builtin.file:
         path: "{{ item }}"
         state: directory
-        owner: root
+        owner: caddy
         group: caddy
         mode: "0750"
       loop:
         - /etc/caddy/clients
-        - /var/log/caddy
       when: enable_caddy | bool
 
     - name: Store the Cloudflare API token
@@ -257,7 +256,7 @@
         owner: root
         group: caddy
         mode: "0640"
-        validate: "caddy validate --adapter caddyfile --config %s"
+        validate: "caddy validate --adapter caddyfile --config %s --envfile /etc/caddy/caddy.env"
       notify: restart caddy
       when: enable_caddy | bool
 
@@ -337,8 +336,8 @@
           [guacamole]
           enabled  = true
           filter   = guacamole
-          logpath  = /var/log/caddy/access.log
-          backend  = auto
+          backend  = systemd
+          journalmatch = _SYSTEMD_UNIT=caddy.service
           maxretry = 5
           findtime = 600
           bantime  = 3600

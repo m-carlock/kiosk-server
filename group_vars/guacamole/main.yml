@@ -2,11 +2,11 @@
 # ============================================================
 #  Guacamole gateway settings. Edit the top block only.
 # ============================================================
-enable_caddy: false
+enable_caddy: true
 
 # --- Your domain ---------------------------------------------------
 # You must own this and its nameservers must point at Cloudflare.
-guac_domain: "cbc.salesinusa.com"
+guac_domain: "kiosk.salesinusa.com"
 
 # Cloudflare zone = the root domain, not the subdomain above.
 cloudflare_zone: "salesinusa.com"
